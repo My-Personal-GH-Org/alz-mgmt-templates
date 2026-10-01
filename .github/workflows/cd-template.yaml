@@ -15,6 +15,10 @@ on:
         description: 'Terraform CLI Version'
         default: 'latest'
         type: string
+      terraform_target:
+        description: 'Optional -target=... flags (space separated)'
+        default: ''
+        type: string
 
 jobs:
   plan:
@@ -61,7 +65,8 @@ jobs:
           plan \
           -out=tfplan \
           -input=false \
-          ${{ inputs.terraform_action == 'destroy' && '-destroy' || '' }}
+          ${{ inputs.terraform_action == 'destroy' && '-destroy' || '' }} \
+          ${{ inputs.terraform_target }}
 
       - name: Create Module Artifact
         run: |
