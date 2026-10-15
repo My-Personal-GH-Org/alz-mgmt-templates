@@ -11,6 +11,10 @@ on:
         description: 'Terraform CLI Version'
         default: 'latest'
         type: string
+      terraform_lock_id:
+        description: 'Optional: Terraform state Lock ID to force-unlock before planning'
+        default: ''
+        type: string
 
 jobs:
   validate:
@@ -69,6 +73,10 @@ jobs:
       ARM_TENANT_ID: "${{ vars.AZURE_TENANT_ID }}"
       ARM_USE_AZUREAD: true
       ARM_USE_OIDC: true
+      # Temporary diagnostic logging for the alzlib/alz-provider root-MG role-assignment
+      # investigation - revert once the debug log has been captured, do not leave this on.
+      TF_LOG: DEBUG
+      TF_LOG_PATH: "${{ github.workspace }}/tf-debug.log"
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -89,6 +97,15 @@ jobs:
           -backend-config="container_name=${{vars.BACKEND_AZURE_STORAGE_ACCOUNT_CONTAINER_NAME}}" \
           -backend-config="key=terraform.tfstate"
 
+      - name: Terraform Force Unlock (optional)
+        if: inputs.terraform_lock_id != ''
+        run: |
+          terraform \
+          -chdir="${{inputs.root_module_folder_relative_path}}" \
+          force-unlock \
+          -force \
+          "${{ inputs.terraform_lock_id }}"
+
       - name: Terraform Plan
         id: plan
         run: |
@@ -96,6 +113,14 @@ jobs:
           -chdir="${{inputs.root_module_folder_relative_path}}" \
           plan \
           -input=false
+
+      - name: Upload Terraform Debug Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tf-debug-log
+          path: ${{ github.workspace }}/tf-debug.log
+          retention-days: 7
 
       - name: Update Pull Request
         if: (success() || failure()) && github.event_name == 'pull_request'
