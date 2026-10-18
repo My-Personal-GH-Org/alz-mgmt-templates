@@ -66,6 +66,12 @@ jobs:
           -backend-config="key=terraform.tfstate"
 
       - name: Terraform Plan for ${{ inputs.terraform_action == 'destroy' && 'Destroy' || 'Apply' }}
+        env:
+          # Passed via env var, not direct ${{ }} interpolation into the script - GH Actions substitutes
+          # the literal string into the script text before bash parses it, so embedded double quotes (needed
+          # for any -target referencing a string-keyed for_each resource, e.g. policy_role_assignments["<uuid>"])
+          # get stripped by bash's own lexer. An env var's content isn't re-lexed that way - only word-split.
+          TERRAFORM_TARGET: ${{ inputs.terraform_target }}
         run: |
           # shellcheck disable=SC2086
           terraform \
@@ -75,7 +81,7 @@ jobs:
           -input=false \
           ${{ inputs.terraform_action == 'destroy' && '-destroy' || '' }} \
           ${{ inputs.import_resources && '-refresh=false' || '' }} \
-          ${{ inputs.terraform_target }}
+          $TERRAFORM_TARGET
 
       - name: Create Module Artifact
         run: |
