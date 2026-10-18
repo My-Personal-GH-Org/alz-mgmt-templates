@@ -162,8 +162,17 @@ jobs:
           terraform -chdir="${{inputs.root_module_folder_relative_path}}" show -json tfplan > plan.json
           $plan = Get-Content plan.json -Raw | ConvertFrom-Json
           $rootMg = "${{ inputs.root_management_group_id }}"
+          # Match on the resource's real parent_id, not the address string - policy_role_assignments
+          # keys are uuidv5() hashes with no MG name in them, so an address substring match (the
+          # original approach here) can never detect a root-scoped role-assignment change, which is
+          # exactly the resource type this whole mechanism exists to catch. Checked against both
+          # after (create/update) and before (destroy) since either can be null depending on the action.
+          $rootMgSuffix = "/managementGroups/$rootMg"
           $matched = $plan.resource_changes | Where-Object {
-            $_.address -match 'azapi_resource\.(policy_assignments|policy_role_assignments)\[' -and $_.address -like "*$rootMg*"
+            $_.address -match 'azapi_resource\.(policy_assignments|policy_role_assignments)\[' -and (
+              ($_.change.after.parent_id -and $_.change.after.parent_id -like "*$rootMgSuffix") -or
+              ($_.change.before.parent_id -and $_.change.before.parent_id -like "*$rootMgSuffix")
+            )
           }
           $changed = $matched.Count -gt 0
           "root_changed=$($changed.ToString().ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
