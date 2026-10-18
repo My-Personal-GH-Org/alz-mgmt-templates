@@ -19,6 +19,14 @@ on:
         description: 'Optional -target=... flags (space separated)'
         default: ''
         type: string
+      import_resources:
+        description: 'One-time state reconciliation: adds -refresh=false so the plan only evaluates the resources named in terraform_target plus any configured import {} blocks, avoiding unrelated broken resources elsewhere in state'
+        default: false
+        type: boolean
+      root_management_group_id:
+        description: 'If set, after apply checks whether the plan touched a policy_assignment/policy_role_assignment at this MG id and auto-runs Scripts/Invoke-PolicyRemediationSweep.ps1 -TargetScope RootOnly against it - works around the known terraform-provider-alz limitation that it never auto-creates role assignments at an externally-referenced (non-Terraform-owned) root MG. Leave blank to disable.'
+        default: ''
+        type: string
 
 jobs:
   plan:
@@ -66,6 +74,7 @@ jobs:
           -out=tfplan \
           -input=false \
           ${{ inputs.terraform_action == 'destroy' && '-destroy' || '' }} \
+          ${{ inputs.import_resources && '-refresh=false' || '' }} \
           ${{ inputs.terraform_target }}
 
       - name: Create Module Artifact
@@ -112,6 +121,7 @@ jobs:
       ARM_USE_AZUREAD: true
       ARM_USE_OIDC: true
       AZAPI_RETRY_GET_AFTER_PUT_MAX_TIME: "60m" # Accounts for eventually consistent management group permissions propagation
+      TF_CLI_ARGS_apply: "-parallelism=3" # Self-hosted runner OOMs (exit 137) at default parallelism=10, even on smaller plans
 
     steps:
       - name: Download a Build Artifact
@@ -143,3 +153,38 @@ jobs:
           -input=false \
           -auto-approve \
           tfplan
+
+      - name: Detect Root-Scoped Policy/Role-Assignment Changes
+        id: detect_root_policy_change
+        if: inputs.root_management_group_id != ''
+        shell: pwsh
+        run: |
+          terraform -chdir="${{inputs.root_module_folder_relative_path}}" show -json tfplan > plan.json
+          $plan = Get-Content plan.json -Raw | ConvertFrom-Json
+          $rootMg = "${{ inputs.root_management_group_id }}"
+          $matched = $plan.resource_changes | Where-Object {
+            $_.address -match 'azapi_resource\.(policy_assignments|policy_role_assignments)\[' -and $_.address -like "*$rootMg*"
+          }
+          $changed = $matched.Count -gt 0
+          "root_changed=$($changed.ToString().ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          if ($changed) {
+            Write-Host "Root-scoped policy_assignment/policy_role_assignment change(s) detected:"
+            $matched | ForEach-Object { Write-Host "  - $($_.address)" }
+          } else {
+            Write-Host "No root-scoped policy_assignment/policy_role_assignment changes in this apply."
+          }
+
+      - name: Azure Login for PolicySweep
+        if: inputs.root_management_group_id != '' && steps.detect_root_policy_change.outputs.root_changed == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: true
+
+      - name: Run PolicySweep (Root-Only)
+        if: inputs.root_management_group_id != '' && steps.detect_root_policy_change.outputs.root_changed == 'true'
+        shell: pwsh
+        run: |
+          ./Scripts/Invoke-PolicyRemediationSweep.ps1 -RootManagementGroupId "${{ inputs.root_management_group_id }}" -TargetScope RootOnly
