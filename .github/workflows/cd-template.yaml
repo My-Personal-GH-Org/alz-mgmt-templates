@@ -193,7 +193,7 @@ jobs:
         if: inputs.root_management_group_id != '' && steps.detect_root_policy_change.outputs.root_changed == 'true'
         uses: azure/login@v2
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          client-id: ${{ vars.POLICYSWEEP_CLIENT_ID || vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
           enable-AzPSSession: true
